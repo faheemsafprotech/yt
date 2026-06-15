@@ -74,14 +74,18 @@ Once the build logs show `Gunicorn listening at http://0.0.0.0:5000` and the sta
 
 When deployed to a cloud server (like Render.com), YouTube may block your server's IP address with a "Sign in to confirm you're not a bot" error. To bypass this:
 
-1. Install a browser extension like **Get cookies.txt LOCALLY** (available on Chrome Web Store and Firefox Add-ons).
-2. Go to YouTube, log in to your account, click the extension icon, and download your cookies as `cookies.txt`.
-3. Put the downloaded `cookies.txt` file in the root directory of your project folder (`D:\Projects\yt`).
-4. Commit and push it to GitHub:
+1. Close your local web browser (Edge, Chrome, Firefox, or Opera) fully to release the database locks.
+2. In your terminal, run the cookie exporter script:
+   ```bash
+   python generate_cookies.py
+   ```
+3. Follow the instructions to extract your YouTube login cookies automatically. This creates a `cookies.txt` file in the project folder containing only YouTube-related authentication data (protecting your privacy).
+4. Commit and push `cookies.txt` to GitHub:
    ```bash
    git add cookies.txt
    git commit -m "Add cookies for deployment auth"
    git push
    ```
-The Python backend will automatically detect the file and use it to authenticate all requests, keeping your deployed downloader running smoothly!
+The Python backend on Render will automatically detect `cookies.txt` and use it to authenticate all requests, keeping your deployed downloader running smoothly without blocks!
+
 
