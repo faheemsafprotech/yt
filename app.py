@@ -52,6 +52,34 @@ HTML = """
 </html>
 """
 
+def get_cookie_opts():
+    # 1. Check if a local cookies.txt file exists (useful for deployment or manual export)
+    cookie_file = os.path.join(os.getcwd(), "cookies.txt")
+    if os.path.exists(cookie_file):
+        print("[Cookies] Found cookies.txt file. Using it.")
+        return {"cookiefile": cookie_file}
+
+    # 2. Try extracting cookies from common browsers locally (Windows-specific fallback)
+    if os.name == 'nt':
+        # Edge, Chrome, and Firefox are the most common on Windows
+        for browser in ["edge", "chrome", "firefox", "opera"]:
+            try:
+                test_opts = {
+                    "cookiesfrombrowser": browser,
+                    "quiet": True,
+                    "noprogress": True,
+                    "logger": SilentLogger(),
+                }
+                with yt_dlp.YoutubeDL(test_opts) as ydl:
+                    # Accessing cookiejar forces cookie extraction/verification
+                    ydl.cookiejar
+                print(f"[Cookies] Successfully loaded cookies from browser: {browser}")
+                return {"cookiesfrombrowser": browser}
+            except Exception:
+                continue
+    print("[Cookies] No valid cookies file or local browser cookies found.")
+    return {}
+
 def check_and_download_ffmpeg():
     # If FFmpeg is already installed globally, skip download
     if shutil.which("ffmpeg"):
@@ -132,6 +160,7 @@ def get_info():
     if not url:
         return {"error": "YouTube URL is required"}, 400
 
+    cookie_opts = get_cookie_opts()
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -141,6 +170,7 @@ def get_info():
         "retries": 10,
         "fragment_retries": 10,
         "socket_timeout": 30,
+        **cookie_opts
     }
 
     try:
@@ -271,6 +301,8 @@ def download_direct():
         safe_title = "download"
     download_name = f"{safe_title}{ext}"
 
+    cookie_opts = get_cookie_opts()
+
     # Mode 1: Progressive (single stream) downloads. We stream them directly from Google's CDN to 
     # forward Content-Length, giving Chrome/Edge a native progress bar in Ctrl+J!
     if "+" not in format_id:
@@ -285,6 +317,7 @@ def download_direct():
                 "retries": 10,
                 "fragment_retries": 10,
                 "socket_timeout": 30,
+                **cookie_opts
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -332,6 +365,7 @@ def download_direct():
             "retries": 10,
             "fragment_retries": 10,
             "socket_timeout": 30,
+            **cookie_opts
         }
         
         # Inject FFmpeg location if portable binary exists, otherwise yt_dlp automatically uses system path
