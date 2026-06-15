@@ -328,3 +328,85 @@ body {
   color: #ffffff;
 }
 
+/* Captcha Widget */
+.captcha-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 20px;
+  cursor: pointer;
+  user-select: none;
+  animation: fadeIn 0.3s ease;
+  transition: all 0.2s ease;
+}
+
+.captcha-box:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.captcha-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.captcha-checkbox {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--text-secondary);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  background: transparent;
+}
+
+.captcha-checkbox.verified {
+  border-color: var(--success-color);
+  background: rgba(16, 185, 129, 0.1);
+}
+
+.captcha-checkbox.verifying {
+  border-color: var(--accent-color);
+}
+
+.captcha-label {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.captcha-logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  gap: 4px;
+}
+
+.captcha-logo svg {
+  width: 24px;
+  height: 24px;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+
+/* Checkmark Drawing Animation */
+.checkmark-path {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: drawCheck 0.3s ease forwards 0.1s;
+}
+
+@keyframes drawCheck {
+  to { stroke-dashoffset: 0; }
+}
+
+

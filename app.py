@@ -157,6 +157,7 @@ def home():
 def get_info():
     data = request.get_json() or {}
     url = data.get("url")
+    bypass = data.get("bypass", False)
     if not url:
         return {"error": "YouTube URL is required"}, 400
 
@@ -172,6 +173,14 @@ def get_info():
         "socket_timeout": 30,
         **cookie_opts
     }
+
+    # If bypass is requested (the user clicked "I'm not a robot"), fallback to embed and mobile clients
+    if bypass:
+        ydl_opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["web_embedded", "mweb"]
+            }
+        }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -280,7 +289,11 @@ def get_info():
                 "formats": formats
             }
     except Exception as e:
-        return {"error": str(e)}, 500
+        err_msg = str(e)
+        # Check if the error is due to a bot detection challenge
+        if "confirm you're not a bot" in err_msg or "Sign in" in err_msg or "confirm you are not a bot" in err_msg:
+            return {"error": "bot_challenge", "message": "YouTube requires bot verification."}, 403
+        return {"error": err_msg}, 500
 
 @app.route("/api/download/direct")
 def download_direct():
@@ -289,6 +302,7 @@ def download_direct():
     url = request.args.get("url")
     format_id = request.args.get("format_id", "best")
     title = request.args.get("title", "download")
+    bypass = request.args.get("bypass", "false").lower() == "true"
     
     if not url:
         return "YouTube URL is required", 400
@@ -319,6 +333,12 @@ def download_direct():
                 "socket_timeout": 30,
                 **cookie_opts
             }
+            if bypass:
+                ydl_opts["extractor_args"] = {
+                    "youtube": {
+                        "player_client": ["web_embedded", "mweb"]
+                    }
+                }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 direct_url = info.get("url")
@@ -367,6 +387,12 @@ def download_direct():
             "socket_timeout": 30,
             **cookie_opts
         }
+        if bypass:
+            ydl_opts["extractor_args"] = {
+                "youtube": {
+                    "player_client": ["web_embedded", "mweb"]
+                }
+            }
         
         # Inject FFmpeg location if portable binary exists, otherwise yt_dlp automatically uses system path
         if os.path.exists(FFMPEG_BIN):

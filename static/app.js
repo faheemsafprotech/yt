@@ -8,6 +8,12 @@ function App() {
   const [success, setSuccess] = useState('');
   const [videoInfo, setVideoInfo] = useState(null);
   const [selectedFormatId, setSelectedFormatId] = useState('best');
+  
+  // CAPTCHA States
+  const [showCaptcha, setShowCaptcha] = useState(false);
+  const [captchaChecked, setCaptchaChecked] = useState(false);
+  const [captchaVerifying, setCaptchaVerifying] = useState(false);
+  const [isBypassed, setIsBypassed] = useState(false);
 
   const formatDuration = (seconds) => {
     if (!seconds) return '';
@@ -21,15 +27,20 @@ function App() {
     ].filter(x => x !== null).join(':');
   };
 
-  const handleFetchInfo = async (e) => {
-    e.preventDefault();
+  const handleFetchInfo = async (e, useBypass = false) => {
+    if (e) e.preventDefault();
     if (!url) return;
 
     setLoading(true);
-    setLoadingMessage('Fetching video details...');
+    setLoadingMessage(useBypass ? 'Bypassing YouTube security checks...' : 'Fetching video details...');
     setError('');
     setSuccess('');
-    setVideoInfo(null);
+    if (!useBypass) {
+      setVideoInfo(null);
+      setShowCaptcha(false);
+      setCaptchaChecked(false);
+      setIsBypassed(false);
+    }
 
     try {
       const response = await fetch('/api/info', {
@@ -37,16 +48,27 @@ function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ 
+          url,
+          bypass: useBypass 
+        }),
       });
 
       const data = await response.json();
 
       if (!response.ok) {
+        if (response.status === 403 && data.error === 'bot_challenge') {
+          setShowCaptcha(true);
+          throw new Error('Bot verification required by YouTube. Please complete the verification below.');
+        }
         throw new Error(data.error || 'Failed to fetch video details.');
       }
 
       setVideoInfo(data);
+      setIsBypassed(useBypass);
+      if (useBypass) {
+        setSuccess('Security verification successful! Formats loaded.');
+      }
       if (data.formats && data.formats.length > 0) {
         setSelectedFormatId(data.formats[0].format_id);
       } else {
@@ -60,14 +82,29 @@ function App() {
     }
   };
 
+  const handleCaptchaClick = () => {
+    if (captchaVerifying || captchaChecked) return;
+    
+    setCaptchaVerifying(true);
+    setError('');
+    
+    // Simulate security check delay (1.2 seconds)
+    setTimeout(() => {
+      setCaptchaVerifying(false);
+      setCaptchaChecked(true);
+      // Re-fetch info immediately using the bypass client configurations
+      handleFetchInfo(null, true);
+    }, 1200);
+  };
+
   const handleDownload = () => {
     if (!url) return;
 
     setSuccess("Download initiated! Please check your browser's download manager/drawer.");
     setError('');
 
-    // Trigger download directly in the browser using the direct streaming download link
-    const downloadUrl = `/api/download/direct?url=${encodeURIComponent(url)}&format_id=${encodeURIComponent(selectedFormatId)}&title=${encodeURIComponent(videoInfo.title)}`;
+    // Trigger download directly in browser. Pass bypass parameter if active.
+    const downloadUrl = `/api/download/direct?url=${encodeURIComponent(url)}&format_id=${encodeURIComponent(selectedFormatId)}&title=${encodeURIComponent(videoInfo.title)}&bypass=${isBypassed}`;
     window.location.href = downloadUrl;
   };
 
@@ -77,6 +114,9 @@ function App() {
     setSelectedFormatId('best');
     setError('');
     setSuccess('');
+    setShowCaptcha(false);
+    setCaptchaChecked(false);
+    setIsBypassed(false);
   };
 
   return (
@@ -87,36 +127,63 @@ function App() {
       </div>
 
       {!videoInfo ? (
-        <form onSubmit={handleFetchInfo}>
-          <div className="form-group">
-            <div className="input-wrapper">
-              <svg className="input-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-              </svg>
-              <input
-                type="url"
-                className="url-input"
-                placeholder="Paste YouTube video link here..."
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                required
-                disabled={loading}
-              />
+        <div>
+          <form onSubmit={(e) => handleFetchInfo(e, false)}>
+            <div className="form-group">
+              <div className="input-wrapper">
+                <svg className="input-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                </svg>
+                <input
+                  type="url"
+                  className="url-input"
+                  placeholder="Paste YouTube video link here..."
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  required
+                  disabled={loading}
+                />
+              </div>
             </div>
-          </div>
 
-          <button type="submit" className="btn" disabled={loading || !url}>
-            {loading ? (
-              <>
-                <div className="spinner"></div>
-                <span>{loadingMessage}</span>
-              </>
-            ) : (
-              <span>Analyze URL</span>
+            {!showCaptcha && (
+              <button type="submit" className="btn" disabled={loading || !url}>
+                {loading ? (
+                  <>
+                    <div className="spinner"></div>
+                    <span>{loadingMessage}</span>
+                  </>
+                ) : (
+                  <span>Analyze URL</span>
+                )}
+              </button>
             )}
-          </button>
-        </form>
+          </form>
+
+          {showCaptcha && (
+            <div className="captcha-box" onClick={handleCaptchaClick}>
+              <div className="captcha-left">
+                <div className={`captcha-checkbox ${captchaChecked ? 'verified' : ''} ${captchaVerifying ? 'verifying' : ''}`}>
+                  {captchaVerifying && <div className="spinner" style={{ width: '16px', height: '16px', borderLeftColor: 'var(--accent-color)' }}></div>}
+                  {captchaChecked && (
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success-color)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" className="checkmark-path"></polyline>
+                    </svg>
+                  )}
+                </div>
+                <span className="captcha-label">I'm not a robot</span>
+              </div>
+              <div className="captcha-logo">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+                <span>Bypass API</span>
+              </div>
+            </div>
+          )}
+        </div>
       ) : (
         <div>
           <div className="preview-card">
