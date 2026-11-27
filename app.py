@@ -82,7 +82,17 @@ def check_and_download_ffmpeg():
 threading.Thread(target=check_and_download_ffmpeg, daemon=True).start()
 
 def get_cookie_opts():
-    """Check for cookies.txt or local browser cookies for bot verification."""
+    """Check for cookies from env var, cookies.txt, or local browser cookies."""
+    env_cookies = os.environ.get("YOUTUBE_COOKIES") or os.environ.get("COOKIES_CONTENT")
+    if env_cookies:
+        cookie_file = os.path.join(DOWNLOAD_FOLDER, "cookies.txt")
+        try:
+            with open(cookie_file, "w", encoding="utf-8") as f:
+                f.write(env_cookies.strip())
+            return {"cookiefile": cookie_file}
+        except Exception:
+            pass
+
     cookie_file = os.path.join(os.getcwd(), "cookies.txt")
     if os.path.exists(cookie_file):
         return {"cookiefile": cookie_file}
@@ -203,6 +213,10 @@ HTML = """
 </html>
 """
 
+@app.route("/favicon.ico")
+def favicon():
+    return Response(status=204)
+
 @app.route("/")
 def home():
     cleanup_stale_files()
@@ -234,196 +248,214 @@ def get_info():
     if platform["id"] == "youtube":
         ydl_opts["js_runtimes"] = {"node": {}}
         ydl_opts["remote_components"] = ["ejs:github"]
-        if bypass:
-            ydl_opts["extractor_args"] = {
-                "youtube": {
-                    "player_client": ["web_embedded", "mweb", "android", "ios"]
-                }
-            }
 
     ffmpeg_path = get_ffmpeg_path()
     if ffmpeg_path:
         ydl_opts["ffmpeg_location"] = ffmpeg_path
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            if not info:
-                return jsonify({"error": "Could not retrieve video information. The link may be private or restricted."}), 404
-
-            raw_formats = info.get("formats", [])
-            title = info.get("title", "Untitled Video")
-            thumbnail = info.get("thumbnail") or ""
-            duration = info.get("duration") or 0
-            uploader = info.get("uploader") or info.get("channel") or info.get("creator") or platform["name"]
-            view_count = info.get("view_count")
-
-            # Organize video formats
-            # Deduplicate by resolution (height)
-            video_formats = []
-            seen_resolutions = set()
-
-            # Sort raw formats by height descending, then fps, then filesize
-            def sort_raw(f):
-                h = f.get("height") or 0
-                fps = f.get("fps") or 0
-                ext = f.get("ext", "")
-                ext_score = 2 if ext == "mp4" else (1 if ext != "webm" else 0)
-                fs = f.get("filesize") or f.get("filesize_approx") or 0
-                return (h, fps, ext_score, fs)
-
-            sorted_raw = sorted(raw_formats, key=sort_raw, reverse=True)
-
-            for f in sorted_raw:
-                f_id = f.get("format_id")
-                if not f_id:
+        info = None
+        if platform["id"] == "youtube":
+            # Smart client fallback strategy:
+            # 1. tv_embedded: completely bypasses datacenter bot detection & provides full 4K/1080p formats
+            # 2. android: reliable mobile stream fallback
+            # 3. web: standard client
+            clients_to_try = [["tv_embedded"], ["android"], ["web"]]
+            last_err = None
+            for client in clients_to_try:
+                test_opts = dict(ydl_opts)
+                test_opts["extractor_args"] = {"youtube": {"player_client": client}}
+                try:
+                    with yt_dlp.YoutubeDL(test_opts) as ydl:
+                        extracted = ydl.extract_info(url, download=False)
+                        if extracted and extracted.get("formats"):
+                            info = extracted
+                            break
+                except Exception as e:
+                    last_err = e
                     continue
-                vcodec = f.get("vcodec", "none")
-                acodec = f.get("acodec", "none")
-                height = f.get("height")
-                fps = f.get("fps")
-                ext = f.get("ext", "mp4")
-                filesize = f.get("filesize") or f.get("filesize_approx")
+            if not info and last_err:
+                raise last_err
+        else:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
 
-                if vcodec == "none" or not height:
-                    continue
+        if not info:
+            return jsonify({"error": "Could not retrieve video information. The link may be private or restricted."}), 404
 
-                res_key = height
-                if res_key in seen_resolutions:
-                    continue
-                seen_resolutions.add(res_key)
+        raw_formats = info.get("formats", [])
+        title = info.get("title", "Untitled Video")
+        thumbnail = info.get("thumbnail") or ""
+        duration = info.get("duration") or 0
+        uploader = info.get("uploader") or info.get("channel") or info.get("creator") or platform["name"]
+        view_count = info.get("view_count")
 
-                # Format label
-                quality_tag = ""
-                if height >= 2160:
-                    quality_tag = "4K Ultra HD"
-                elif height >= 1440:
-                    quality_tag = "2K QHD"
-                elif height >= 1080:
-                    quality_tag = "1080p FHD"
-                elif height >= 720:
-                    quality_tag = "720p HD"
-                elif height >= 480:
-                    quality_tag = "480p"
-                else:
-                    quality_tag = f"{height}p"
+        # Organize video formats
+        # Deduplicate by resolution (height)
+        video_formats = []
+        seen_resolutions = set()
 
-                fps_tag = f" {fps}fps" if fps and fps > 30 else ""
-                size_str = format_bytes(filesize) if filesize else ""
+        # Sort raw formats by height descending, then fps, then filesize
+        def sort_raw(f):
+            h = f.get("height") or 0
+            fps = f.get("fps") or 0
+            ext = f.get("ext", "")
+            ext_score = 2 if ext == "mp4" else (1 if ext != "webm" else 0)
+            fs = f.get("filesize") or f.get("filesize_approx") or 0
+            return (h, fps, ext_score, fs)
 
-                has_audio = acodec != "none"
-                download_fid = f_id if has_audio else f"{f_id}+bestaudio/best"
+        sorted_raw = sorted(raw_formats, key=sort_raw, reverse=True)
 
-                video_formats.append({
-                    "format_id": download_fid,
-                    "resolution": f"{height}p",
-                    "label": f"{quality_tag}{fps_tag}",
-                    "sub_label": "MP4 (Video + Audio)" + (f" ~ {size_str}" if size_str else ""),
-                    "quality_badge": quality_tag,
-                    "height": height,
-                    "fps": fps,
-                    "filesize_str": size_str,
-                    "ext": "mp4",
-                    "is_video": True
-                })
+        for f in sorted_raw:
+            f_id = f.get("format_id")
+            if not f_id:
+                continue
+            vcodec = f.get("vcodec", "none")
+            acodec = f.get("acodec", "none")
+            height = f.get("height")
+            fps = f.get("fps")
+            ext = f.get("ext", "mp4")
+            filesize = f.get("filesize") or f.get("filesize_approx")
 
-            # Sort standard heights
-            video_formats.sort(key=lambda x: x["height"], reverse=True)
+            if vcodec == "none" or not height:
+                continue
 
-            # Fallback if no specific formats were parsed
-            if not video_formats:
-                video_formats.append({
-                    "format_id": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                    "resolution": "Best",
-                    "label": "Best Available Quality",
-                    "sub_label": "MP4 (Highest Quality Stream)",
-                    "quality_badge": "Best",
-                    "height": 1080,
-                    "filesize_str": "",
-                    "ext": "mp4",
-                    "is_video": True
-                })
+            res_key = height
+            if res_key in seen_resolutions:
+                continue
+            seen_resolutions.add(res_key)
 
-            # Standardized Audio formats (MP3 presets, M4A original, WAV lossless)
-            audio_formats = [
-                {
-                    "format_id": "audio_mp3_320",
-                    "audio_codec": "mp3",
-                    "audio_quality": "320",
-                    "label": "MP3 High Quality",
-                    "sub_label": "320 kbps ~ Crystal Clear Audio",
-                    "quality_badge": "320 kbps",
-                    "ext": "mp3",
-                    "is_video": False
-                },
-                {
-                    "format_id": "audio_mp3_192",
-                    "audio_codec": "mp3",
-                    "audio_quality": "192",
-                    "label": "MP3 Standard Quality",
-                    "sub_label": "192 kbps ~ Balanced Size & Quality",
-                    "quality_badge": "192 kbps",
-                    "ext": "mp3",
-                    "is_video": False
-                },
-                {
-                    "format_id": "audio_mp3_128",
-                    "audio_codec": "mp3",
-                    "audio_quality": "128",
-                    "label": "MP3 Fast & Compact",
-                    "sub_label": "128 kbps ~ Smallest File Size",
-                    "quality_badge": "128 kbps",
-                    "ext": "mp3",
-                    "is_video": False
-                },
-                {
-                    "format_id": "audio_m4a_best",
-                    "audio_codec": "m4a",
-                    "audio_quality": None,
-                    "label": "M4A / AAC Original Stream",
-                    "sub_label": "Direct untouched audio stream",
-                    "quality_badge": "M4A",
-                    "ext": "m4a",
-                    "is_video": False
-                },
-                {
-                    "format_id": "audio_wav_lossless",
-                    "audio_codec": "wav",
-                    "audio_quality": None,
-                    "label": "WAV Lossless Audio",
-                    "sub_label": "Uncompressed Studio WAV",
-                    "quality_badge": "WAV",
-                    "ext": "wav",
-                    "is_video": False
-                }
-            ]
+            # Format label
+            quality_tag = ""
+            if height >= 2160:
+                quality_tag = "4K Ultra HD"
+            elif height >= 1440:
+                quality_tag = "2K QHD"
+            elif height >= 1080:
+                quality_tag = "1080p FHD"
+            elif height >= 720:
+                quality_tag = "720p HD"
+            elif height >= 480:
+                quality_tag = "480p"
+            else:
+                quality_tag = f"{height}p"
 
-            # Flattened formats list for backwards compatibility
-            all_formats = []
-            for vf in video_formats:
-                all_formats.append({
-                    "format_id": vf["format_id"],
-                    "label": f"{vf['label']} - {vf['sub_label']}",
-                    "category": "video"
-                })
-            for af in audio_formats:
-                all_formats.append({
-                    "format_id": af["format_id"],
-                    "label": f"{af['label']} ({af['quality_badge']})",
-                    "category": "audio"
-                })
+            fps_tag = f" {fps}fps" if fps and fps > 30 else ""
+            size_str = format_bytes(filesize) if filesize else ""
 
-            return jsonify({
-                "title": title,
-                "thumbnail": thumbnail,
-                "duration": duration,
-                "uploader": uploader,
-                "view_count": view_count,
-                "platform": platform,
-                "video_formats": video_formats,
-                "audio_formats": audio_formats,
-                "formats": all_formats
+            has_audio = acodec != "none"
+            download_fid = f_id if has_audio else f"{f_id}+bestaudio/best"
+
+            video_formats.append({
+                "format_id": download_fid,
+                "resolution": f"{height}p",
+                "label": f"{quality_tag}{fps_tag}",
+                "sub_label": "MP4 (Video + Audio)" + (f" ~ {size_str}" if size_str else ""),
+                "quality_badge": quality_tag,
+                "height": height,
+                "fps": fps,
+                "filesize_str": size_str,
+                "ext": "mp4",
+                "is_video": True
             })
+
+        # Sort standard heights
+        video_formats.sort(key=lambda x: x["height"], reverse=True)
+
+        # Fallback if no specific formats were parsed
+        if not video_formats:
+            video_formats.append({
+                "format_id": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "resolution": "Best",
+                "label": "Best Available Quality",
+                "sub_label": "MP4 (Highest Quality Stream)",
+                "quality_badge": "Best",
+                "height": 1080,
+                "filesize_str": "",
+                "ext": "mp4",
+                "is_video": True
+            })
+
+        # Standardized Audio formats (MP3 presets, M4A original, WAV lossless)
+        audio_formats = [
+            {
+                "format_id": "audio_mp3_320",
+                "audio_codec": "mp3",
+                "audio_quality": "320",
+                "label": "MP3 High Quality",
+                "sub_label": "320 kbps ~ Crystal Clear Audio",
+                "quality_badge": "320 kbps",
+                "ext": "mp3",
+                "is_video": False
+            },
+            {
+                "format_id": "audio_mp3_192",
+                "audio_codec": "mp3",
+                "audio_quality": "192",
+                "label": "MP3 Standard Quality",
+                "sub_label": "192 kbps ~ Balanced Size & Quality",
+                "quality_badge": "192 kbps",
+                "ext": "mp3",
+                "is_video": False
+            },
+            {
+                "format_id": "audio_mp3_128",
+                "audio_codec": "mp3",
+                "audio_quality": "128",
+                "label": "MP3 Fast & Compact",
+                "sub_label": "128 kbps ~ Smallest File Size",
+                "quality_badge": "128 kbps",
+                "ext": "mp3",
+                "is_video": False
+            },
+            {
+                "format_id": "audio_m4a_best",
+                "audio_codec": "m4a",
+                "audio_quality": None,
+                "label": "M4A / AAC Original Stream",
+                "sub_label": "Direct untouched audio stream",
+                "quality_badge": "M4A",
+                "ext": "m4a",
+                "is_video": False
+            },
+            {
+                "format_id": "audio_wav_lossless",
+                "audio_codec": "wav",
+                "audio_quality": None,
+                "label": "WAV Lossless Audio",
+                "sub_label": "Uncompressed Studio WAV",
+                "quality_badge": "WAV",
+                "ext": "wav",
+                "is_video": False
+            }
+        ]
+
+        # Flattened formats list for backwards compatibility
+        all_formats = []
+        for vf in video_formats:
+            all_formats.append({
+                "format_id": vf["format_id"],
+                "label": f"{vf['label']} - {vf['sub_label']}",
+                "category": "video"
+            })
+        for af in audio_formats:
+            all_formats.append({
+                "format_id": af["format_id"],
+                "label": f"{af['label']} ({af['quality_badge']})",
+                "category": "audio"
+            })
+
+        return jsonify({
+            "title": title,
+            "thumbnail": thumbnail,
+            "duration": duration,
+            "uploader": uploader,
+            "view_count": view_count,
+            "platform": platform,
+            "video_formats": video_formats,
+            "audio_formats": audio_formats,
+            "formats": all_formats
+        })
 
     except Exception as e:
         err_msg = str(e)
@@ -455,12 +487,11 @@ def run_download_thread(task_id, url, is_audio, format_id, audio_codec, audio_qu
     if platform["id"] == "youtube":
         ydl_opts["js_runtimes"] = {"node": {}}
         ydl_opts["remote_components"] = ["ejs:github"]
-        if bypass:
-            ydl_opts["extractor_args"] = {
-                "youtube": {
-                    "player_client": ["web_embedded", "mweb", "android", "ios"]
-                }
+        ydl_opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["tv_embedded"]
             }
+        }
 
     if ffmpeg_path:
         ydl_opts["ffmpeg_location"] = ffmpeg_path
@@ -527,8 +558,16 @@ def run_download_thread(task_id, url, is_audio, format_id, audio_codec, audio_qu
     ydl_opts["postprocessor_hooks"] = [postprocessor_hook]
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except Exception as dl_err:
+            if platform["id"] == "youtube":
+                ydl_opts["extractor_args"] = {"youtube": {"player_client": ["android"]}}
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+            else:
+                raise dl_err
 
         file_path = find_downloaded_file(out_prefix)
         if not file_path or not os.path.exists(file_path):
@@ -694,8 +733,7 @@ def download_direct():
             }
             if platform["id"] == "youtube":
                 ydl_opts["js_runtimes"] = {"node": {}}
-                if bypass:
-                    ydl_opts["extractor_args"] = {"youtube": {"player_client": ["web_embedded", "mweb"]}}
+                ydl_opts["extractor_args"] = {"youtube": {"player_client": ["tv_embedded"]}}
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 direct_url = info.get("url")
@@ -735,8 +773,8 @@ def download_direct():
             "socket_timeout": 30,
             **cookie_opts
         }
-        if platform["id"] == "youtube" and bypass:
-            ydl_opts["extractor_args"] = {"youtube": {"player_client": ["web_embedded", "mweb"]}}
+        if platform["id"] == "youtube":
+            ydl_opts["extractor_args"] = {"youtube": {"player_client": ["tv_embedded"]}}
         if ffmpeg_path:
             ydl_opts["ffmpeg_location"] = ffmpeg_path
 
