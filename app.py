@@ -256,11 +256,12 @@ def get_info():
     try:
         info = None
         if platform["id"] == "youtube":
-            # Smart client fallback strategy:
-            # 1. tv_embedded: completely bypasses datacenter bot detection & provides full 4K/1080p formats
-            # 2. android: reliable mobile stream fallback
-            # 3. web: standard client
-            clients_to_try = [["tv_embedded"], ["android"], ["web"]]
+            # Smart client fallback strategy that bypasses datacenter bot checks:
+            # 1. visionos: Apple Vision Pro client, JS-less, 100% bypasses datacenter bot checks, full 4K/1080p formats
+            # 2. ios_producer: iOS creator client with high quality streams
+            # 3. android: Android client fallback
+            # 4. android_vr: VR client fallback
+            clients_to_try = [["visionos"], ["ios_producer"], ["android"], ["android_vr"]]
             last_err = None
             for client in clients_to_try:
                 test_opts = dict(ydl_opts)
@@ -489,7 +490,7 @@ def run_download_thread(task_id, url, is_audio, format_id, audio_codec, audio_qu
         ydl_opts["remote_components"] = ["ejs:github"]
         ydl_opts["extractor_args"] = {
             "youtube": {
-                "player_client": ["tv_embedded"]
+                "player_client": ["visionos"]
             }
         }
 
@@ -733,7 +734,7 @@ def download_direct():
             }
             if platform["id"] == "youtube":
                 ydl_opts["js_runtimes"] = {"node": {}}
-                ydl_opts["extractor_args"] = {"youtube": {"player_client": ["tv_embedded"]}}
+                ydl_opts["extractor_args"] = {"youtube": {"player_client": ["visionos"]}}
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 direct_url = info.get("url")
@@ -774,7 +775,7 @@ def download_direct():
             **cookie_opts
         }
         if platform["id"] == "youtube":
-            ydl_opts["extractor_args"] = {"youtube": {"player_client": ["tv_embedded"]}}
+            ydl_opts["extractor_args"] = {"youtube": {"player_client": ["visionos"]}}
         if ffmpeg_path:
             ydl_opts["ffmpeg_location"] = ffmpeg_path
 
