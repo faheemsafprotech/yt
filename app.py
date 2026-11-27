@@ -13,8 +13,17 @@ import yt_dlp
 
 app = Flask(__name__)
 
-DOWNLOAD_FOLDER = os.path.join(os.getcwd(), "downloads")
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+# Handle serverless environments (Vercel, AWS Lambda) where only /tmp is writable
+IS_SERVERLESS = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
+if IS_SERVERLESS:
+    DOWNLOAD_FOLDER = "/tmp/downloads"
+else:
+    DOWNLOAD_FOLDER = os.path.join(os.getcwd(), "downloads")
+
+try:
+    os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+except Exception as e:
+    print(f"[Warning] Could not create download folder: {e}")
 
 FFMPEG_DIR = os.path.join(os.getcwd(), "ffmpeg")
 FFMPEG_BIN = os.path.join(FFMPEG_DIR, "ffmpeg.exe")
