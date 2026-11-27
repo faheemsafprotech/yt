@@ -217,6 +217,111 @@ HTML = """
 def favicon():
     return Response(status=204)
 
+def extract_with_pytubefix(url):
+    """Alternative extractor engine using pytubefix to completely bypass yt-dlp datacenter blocks."""
+    try:
+        from pytubefix import YouTube
+        for cl in ["ANDROID", "WEB", "IOS"]:
+            try:
+                yt = YouTube(url, client=cl)
+                if not yt.title:
+                    continue
+
+                video_formats = []
+                seen_res = set()
+
+                # 1. Progressive streams (clean MP4 with video and audio in one stream, no SABR blocks)
+                for s in yt.streams.filter(progressive=True).order_by('resolution').desc():
+                    if s.resolution and s.resolution not in seen_res:
+                        seen_res.add(s.resolution)
+                        h = int(s.resolution.replace("p", "")) if "p" in s.resolution else 720
+                        video_formats.append({
+                            "format_id": f"ptf_{s.itag}",
+                            "resolution": s.resolution,
+                            "label": f"{s.resolution} (Direct MP4)",
+                            "sub_label": f"Fast MP4 Video + Sound ~ {s.filesize_mb:.1f} MB",
+                            "quality_badge": s.resolution,
+                            "height": h,
+                            "filesize_str": f"{s.filesize_mb:.1f} MB",
+                            "ext": "mp4",
+                            "is_video": True
+                        })
+
+                # 2. Adaptive high-res video streams (1080p, 1440p, 2160p)
+                for s in yt.streams.filter(only_video=True).order_by('resolution').desc():
+                    if s.resolution and s.resolution not in seen_res and s.resolution in ["2160p", "1440p", "1080p", "720p"]:
+                        seen_res.add(s.resolution)
+                        h = int(s.resolution.replace("p", "")) if "p" in s.resolution else 720
+                        video_formats.append({
+                            "format_id": f"ptf_{s.itag}",
+                            "resolution": s.resolution,
+                            "label": f"{s.resolution} Ultra/HD",
+                            "sub_label": f"High Definition Stream ~ {s.filesize_mb:.1f} MB",
+                            "quality_badge": s.resolution,
+                            "height": h,
+                            "filesize_str": f"{s.filesize_mb:.1f} MB",
+                            "ext": "mp4",
+                            "is_video": True
+                        })
+
+                if not video_formats:
+                    s = yt.streams.get_highest_resolution()
+                    if s:
+                        video_formats.append({
+                            "format_id": f"ptf_{s.itag}",
+                            "resolution": s.resolution or "720p",
+                            "label": f"{s.resolution or '720p'} MP4",
+                            "sub_label": "Direct MP4 Stream",
+                            "quality_badge": s.resolution or "720p",
+                            "height": 720,
+                            "filesize_str": f"{s.filesize_mb:.1f} MB" if hasattr(s, 'filesize_mb') else "",
+                            "ext": "mp4",
+                            "is_video": True
+                        })
+
+                audio_formats = [
+                    {
+                        "format_id": "ptf_audio",
+                        "audio_codec": "m4a",
+                        "label": "Original Audio Track",
+                        "sub_label": "M4A High Quality Audio",
+                        "quality_badge": "M4A",
+                        "ext": "m4a",
+                        "is_video": False
+                    }
+                ]
+
+                all_formats = []
+                for vf in video_formats:
+                    all_formats.append({
+                        "format_id": vf["format_id"],
+                        "label": f"{vf['label']} - {vf['sub_label']}",
+                        "category": "video"
+                    })
+                for af in audio_formats:
+                    all_formats.append({
+                        "format_id": af["format_id"],
+                        "label": af["label"],
+                        "category": "audio"
+                    })
+
+                return jsonify({
+                    "title": yt.title,
+                    "thumbnail": yt.thumbnail_url or "",
+                    "duration": yt.length or 0,
+                    "uploader": yt.author or "YouTube Creator",
+                    "view_count": yt.views,
+                    "platform": {"name": "YouTube (Pytubefix)", "id": "youtube", "color": "#ef4444"},
+                    "video_formats": video_formats,
+                    "audio_formats": audio_formats,
+                    "formats": all_formats
+                })
+            except Exception:
+                continue
+    except Exception as e:
+        app.logger.error(f"Pytubefix extraction failed: {e}")
+    return None
+
 @app.route("/")
 def home():
     cleanup_stale_files()
@@ -233,6 +338,14 @@ def get_info():
         return jsonify({"error": "Please provide a valid video URL."}), 400
 
     platform = detect_platform(url)
+
+    # 1. For YouTube: Try pytubefix first as alternative engine to yt-dlp
+    if platform["id"] == "youtube":
+        ptf_result = extract_with_pytubefix(url)
+        if ptf_result:
+            return ptf_result
+
+    # 2. Fall back to yt-dlp for all platforms and as secondary YouTube engine
     cookie_opts = get_cookie_opts()
 
     ydl_opts = {
@@ -474,6 +587,45 @@ def run_download_thread(task_id, url, is_audio, format_id, audio_codec, audio_qu
     out_prefix = f"{task_id}"
     outtmpl = os.path.join(DOWNLOAD_FOLDER, f"{out_prefix}.%(ext)s")
 
+    # Engine 1: Handle pytubefix downloads
+    if format_id.startswith("ptf_"):
+        try:
+            from pytubefix import YouTube
+            itag_str = format_id.replace("ptf_", "")
+            yt = YouTube(url, client="ANDROID")
+            if itag_str == "audio":
+                stream = yt.streams.filter(only_audio=True).first() or yt.streams.filter(progressive=True).first()
+            else:
+                stream = yt.streams.get_by_itag(int(itag_str))
+
+            if stream:
+                with tasks_lock:
+                    task = download_tasks.get(task_id)
+                    if task:
+                        task["stage"] = "Downloading with Pytubefix engine..."
+                        task["percent"] = 40.0
+
+                target_file = stream.download(output_path=DOWNLOAD_FOLDER, filename=f"{out_prefix}.mp4")
+                actual_ext = os.path.splitext(target_file)[1] or ".mp4"
+                final_filename = f"{safe_title}{actual_ext}"
+                fsize = os.path.getsize(target_file)
+
+                with tasks_lock:
+                    task = download_tasks.get(task_id)
+                    if task:
+                        task["status"] = "completed"
+                        task["percent"] = 100.0
+                        task["stage"] = "Download complete and ready to save!"
+                        task["filepath"] = target_file
+                        task["filename"] = final_filename
+                        task["filesize"] = fsize
+                        task["filesize_str"] = format_bytes(fsize)
+                        task["download_url"] = f"/api/download/file/{task_id}"
+                return
+        except Exception as ptf_e:
+            app.logger.warning(f"Pytubefix download failed ({ptf_e}), falling back to yt-dlp...")
+
+    # Engine 2: yt-dlp
     ydl_opts = {
         "outtmpl": outtmpl,
         "quiet": True,
@@ -716,6 +868,32 @@ def download_direct():
     ext = ".m4a" if ("audio" in format_id and "+" not in format_id) else ".mp4"
     safe_title = "".join([c for c in title if c.isalnum() or c in " .-_()"]).strip() or "download"
     download_name = f"{safe_title}{ext}"
+
+    # Engine 1: Handle pytubefix streaming
+    if format_id.startswith("ptf_"):
+        try:
+            from pytubefix import YouTube
+            itag_str = format_id.replace("ptf_", "")
+            yt = YouTube(url, client="ANDROID")
+            if itag_str == "audio":
+                stream = yt.streams.filter(only_audio=True).first() or yt.streams.filter(progressive=True).first()
+            else:
+                stream = yt.streams.get_by_itag(int(itag_str))
+
+            if stream and stream.url:
+                req = requests.get(stream.url, stream=True, headers={"User-Agent": "Mozilla/5.0"})
+                headers = {
+                    "Content-Disposition": f'attachment; filename="{download_name}"',
+                    "Content-Type": req.headers.get("content-type", "application/octet-stream")
+                }
+                if req.headers.get("content-length"):
+                    headers["Content-Length"] = req.headers["content-length"]
+                return Response(
+                    stream_with_context(req.iter_content(chunk_size=65536)),
+                    headers=headers
+                )
+        except Exception:
+            pass
 
     cookie_opts = get_cookie_opts()
     platform = detect_platform(url)
