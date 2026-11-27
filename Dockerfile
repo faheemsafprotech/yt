@@ -10,12 +10,11 @@ RUN apk add --no-cache \
 # Set working directory
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
-COPY pnpm-lock.yaml ./
+# Copy package files and workspace config (with allowBuilds for sharp)
+COPY package*.json pnpm-lock.yaml* pnpm-workspace.yaml* ./
 
 # Install dependencies
-RUN npm install -g pnpm && pnpm install
+RUN npm install -g pnpm && (pnpm approve-builds --all || true) && pnpm install
 
 # Copy source code
 COPY . .
@@ -43,10 +42,11 @@ ENV HOSTNAME="0.0.0.0"
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/package*.json ./
-COPY --from=builder /app/pnpm-lock.yaml ./
+COPY --from=builder /app/pnpm-lock.yaml* ./
+COPY --from=builder /app/pnpm-workspace.yaml* ./
 
 # Install only production dependencies
-RUN npm install -g pnpm && pnpm install --prod
+RUN npm install -g pnpm && (pnpm approve-builds --all || true) && pnpm install --prod
 
 # Expose port
 EXPOSE 3000
