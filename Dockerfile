@@ -1,4 +1,4 @@
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -24,7 +24,7 @@ COPY . .
 RUN pnpm build
 
 # Production stage
-FROM node:18-alpine AS runner
+FROM node:20-alpine AS runner
 
 # Install system dependencies
 RUN apk add --no-cache \
@@ -34,6 +34,10 @@ RUN apk add --no-cache \
     && pip3 install --break-system-packages yt-dlp
 
 WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
 
 # Copy built application
 COPY --from=builder /app/.next ./.next
@@ -48,4 +52,4 @@ RUN npm install -g pnpm && pnpm install --prod
 EXPOSE 3000
 
 # Start the application
-CMD ["pnpm", "start"] 
+CMD ["pnpm", "start"]

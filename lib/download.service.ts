@@ -339,7 +339,18 @@ class DownloadService {
     options: DownloadOptions,
     isPlaylist: boolean,
   ): string[] {
-    const args = ['--progress', '--newline', '-f', formatId, '-o', outputPath, '--no-warnings', '--ignore-errors']
+    const args = [
+      '--progress',
+      '--newline',
+      '-f',
+      formatId,
+      '-o',
+      outputPath,
+      '--no-warnings',
+      '--ignore-errors',
+      '--extractor-args',
+      'youtube:player_client=android,web',
+    ]
 
     if (formatId.includes('+')) {
       args.push('--merge-output-format', 'mp4')
